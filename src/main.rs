@@ -4,6 +4,8 @@
 use vexide::prelude::*;
 use core::time::Duration;
 
+const MAX_MOTOR_POWER: f64 = 12.0;
+
 struct Robot {
     
     // Drivetrain motors
@@ -66,8 +68,8 @@ impl Compete for Robot {
                 let left_y = state.left_stick.y();
                 let right_x = state.right_stick.x();
 
-                let left_power = left_y * 12.0;
-                let right_power = right_x * 12.0;
+                let left_power = MAX_MOTOR_POWER.min((left_y + right_x) * 12.0);
+                let right_power = MAX_MOTOR_POWER.min((left_y - right_x) * 12.0);
 
                 self.left_drive.set_voltage(left_power).ok();
                 self.right_drive.set_voltage(right_power).ok();
