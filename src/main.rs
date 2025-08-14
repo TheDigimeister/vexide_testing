@@ -2,6 +2,7 @@
 #![no_std]
 
 use vexide::prelude::*;
+use core::time::Duration;
 
 struct Robot {
     
@@ -57,7 +58,22 @@ impl Compete for Robot {
     }
 
     async fn driver(&mut self) {
-        println!("Driver!");
+            // Split arcade drive
+            loop {
+
+                let state = self.main_controller.state().unwrap_or_default();
+                // Main controller (left side)
+                let left_y = state.left_stick.y();
+                let right_x = state.right_stick.x();
+
+                let left_power = left_y * 12.0;
+                let right_power = right_x * 12.0;
+
+                self.left_drive.set_voltage(left_power).ok();
+                self.right_drive.set_voltage(right_power).ok();
+
+                sleep(Duration::from_millis(20)).await;
+            }
     }
 }
 
