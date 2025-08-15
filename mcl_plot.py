@@ -26,11 +26,12 @@ robot_plot, = ax.plot([], [], 'ro')
 heading_plot, = ax.plot([], [], 'b-')
 
 def update_plot(x, y, theta):
+    theta_rad = theta * np.pi/180
     robot_plot.set_data([x], [y])
     # VEX V5 inertial: theta increases clockwise, but matplotlib uses standard math (counterclockwise)
     # So invert theta for heading plot
-    dx = 20 * np.cos(-theta + 90)
-    dy = 20 * np.sin(-theta + 90)
+    dx = 20 * np.cos(-theta_rad + np.pi/2)
+    dy = 20 * np.sin(-theta_rad + np.pi/2)
     heading_plot.set_data([x, x + dx], [y, y + dy])
     plt.draw()
     plt.pause(0.01)

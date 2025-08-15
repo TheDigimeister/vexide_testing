@@ -71,33 +71,73 @@ impl Robot {
             right = (reading.distance as f64 / 10.0).min(sensor_max_range);
         }
 
-        println!("front = {}, back = {}, left = {}, right = {}", front, back, left, right);
+        // println!("front = {}, back = {}, left = {}, right = {}", front, back, left, right);
+
+        // Get IMU heading in radians
+    let imu_heading_deg = self.imu.heading().unwrap_or(0.0);
+    let imu_heading_rad = -imu_heading_deg.to_radians();
 
         // Update particle weights based on sensor readings
         for p in particles.iter_mut() {
-            // Simulate expected sensor readings for this particle
-            let expected_front = FIELD_HEIGHT - p.y;
-            let expected_back = p.y;
-            let expected_left = p.x;
-            let expected_right = FIELD_WIDTH - p.x;
+            // Rotate sensor directions by IMU heading
+            let cos_h = imu_heading_rad.cos();
+            let sin_h = imu_heading_rad.sin();
+
+            // Sensor directions in robot frame: front (0,1), back (0,-1), left (-1,0), right (1,0)
+            let directions = [
+                (0.0, 1.0),   // front
+                (0.0, -1.0),  // back
+                (-1.0, 0.0),  // left
+                (1.0, 0.0),   // right
+            ];
+            let expected = directions.map(|(dx, dy)| {
+                // Rotate by heading
+                let dx_r = dx * cos_h - dy * sin_h;
+                let dy_r = dx * sin_h + dy * cos_h;
+                // Compute distance to wall in rotated direction
+                let mut dist = sensor_max_range;
+                if dx_r.abs() > 1e-6 {
+                    // Intersect with left/right walls
+                    let tx = if dx_r > 0.0 {
+                        (FIELD_WIDTH - p.x) / dx_r
+                    } else {
+                        -p.x / dx_r
+                    };
+                    if tx > 0.0 && tx < dist {
+                        dist = tx;
+                    }
+                }
+                if dy_r.abs() > 1e-6 {
+                    // Intersect with top/bottom walls
+                    let ty = if dy_r > 0.0 {
+                        (FIELD_HEIGHT - p.y) / dy_r
+                    } else {
+                        -p.y / dy_r
+                    };
+                    if ty > 0.0 && ty < dist {
+                        dist = ty;
+                    }
+                }
+                dist
+            });
 
             let sigma = 10.0; // sensor noise (cm)
             let mut weight = 1.0;
             // Only use sensor readings that are in range
             if front < sensor_max_range {
-                let w_front = (-((front - expected_front).powi(2)) / (2.0 * sigma * sigma)).exp();
+                let w_front = (-((front - expected[0]).powi(2)) / (2.0 * sigma * sigma)).exp();
                 weight *= w_front;
             }
             if back < sensor_max_range {
-                let w_back = (-((back - expected_back).powi(2)) / (2.0 * sigma * sigma)).exp();
+                let w_back = (-((back - expected[1]).powi(2)) / (2.0 * sigma * sigma)).exp();
                 weight *= w_back;
             }
             if left < sensor_max_range {
-                let w_left = (-((left - expected_left).powi(2)) / (2.0 * sigma * sigma)).exp();
+                let w_left = (-((left - expected[2]).powi(2)) / (2.0 * sigma * sigma)).exp();
                 weight *= w_left;
             }
             if right < sensor_max_range {
-                let w_right = (-((right - expected_right).powi(2)) / (2.0 * sigma * sigma)).exp();
+                let w_right = (-((right - expected[3]).powi(2)) / (2.0 * sigma * sigma)).exp();
                 weight *= w_right;
             }
             p.weight = weight;
@@ -138,7 +178,7 @@ impl Robot {
         }
         let x = x_sum / NUM_PARTICLES as f64;
         let y = y_sum / NUM_PARTICLES as f64;
-        let theta = 0.0; // Not estimated here
+        let theta = self.imu.heading().unwrap_or(0.0);
 
         (x, y, theta)
     }
