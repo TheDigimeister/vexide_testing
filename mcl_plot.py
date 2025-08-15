@@ -1,5 +1,11 @@
 import serial
 import matplotlib.pyplot as plt
+import threading
+import queue
+import re
+import numpy as np
+import keyboard  # pip install keyboard
+import sys
 
 # Serial port settings
 SERIAL_PORT = 'COM10'  # Change to your port
@@ -36,19 +42,30 @@ def update_plot(x, y, theta):
     plt.draw()
     plt.pause(0.01)
 
-import re
-import numpy as np
-
 pose_re = re.compile(r'Estimated pose: x=(\d*\.\d+), y=(\d*\.\d+), theta=(\d*\.\d+)')
+pose_queue = queue.Queue()
 
-with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1) as ser:
-    while True:
-        line = ser.readline().decode('utf-8').strip()
-        match = pose_re.search(line)
+# Serial reading thread
+def serial_reader():
+    with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1) as ser:
+        while True:
+            line = ser.readline().decode('utf-8').strip()
+            match = pose_re.search(line)
+            if match:
+                x = float(match.group(1))
+                y = float(match.group(2))
+                theta = float(match.group(3))
+                pose_queue.put((x, y, theta))
 
-        if match:
-            x = float(match.group(1))
-            y = float(match.group(2))
-            theta = float(match.group(3))
+threading.Thread(target=serial_reader, daemon=True).start()
 
-            update_plot(x, y, theta)
+while True:
+    if keyboard.is_pressed('q'):
+        print("Exiting...")
+        plt.close('all')
+        sys.exit(0)
+    try:
+        x, y, theta = pose_queue.get(timeout=0.1)
+        update_plot(x, y, theta)
+    except queue.Empty:
+        pass

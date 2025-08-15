@@ -23,7 +23,7 @@ impl Particle {
 // Field dimensions (example, adjust as needed)
 const FIELD_WIDTH: f64 = 365.76; // cm
 const FIELD_HEIGHT: f64 = 365.76; // cm
-const NUM_PARTICLES: usize = 10000;
+const NUM_PARTICLES: usize = 1000;
 
 impl Robot {
     // Monte Carlo Localization using distance sensors
@@ -44,12 +44,49 @@ impl Robot {
         }
 
         let mut rng = NoStdRng::new(42); // Fixed seed for repeatability
-        let mut particles: [Particle; NUM_PARTICLES] = core::array::from_fn(|_| {
-            Particle::new(
-                rng.next_f64() * FIELD_WIDTH,
-                rng.next_f64() * FIELD_HEIGHT,
-            )
-        });
+        // Static particles buffer, only reinitialize if needed
+        static mut PARTICLES: Option<[Particle; NUM_PARTICLES]> = None;
+        let particles = unsafe {
+            PARTICLES.get_or_insert_with(|| {
+                core::array::from_fn(|_| {
+                    Particle::new(
+                        rng.next_f64() * FIELD_WIDTH,
+                        rng.next_f64() * FIELD_HEIGHT,
+                    )
+                })
+            })
+        };
+
+        // --- MOTION MODEL: update particles using odometry ---
+        let left_pos_deg = self.left_drive.position().map(|p| p.as_degrees()).unwrap_or(0.0);
+        let right_pos_deg = self.right_drive.position().map(|p| p.as_degrees()).unwrap_or(0.0);
+        let left_delta = left_pos_deg - self.prev_left_pos_deg;
+        let right_delta = right_pos_deg - self.prev_right_pos_deg;
+        self.prev_left_pos_deg = left_pos_deg;
+        self.prev_right_pos_deg = right_pos_deg;
+
+        // Convert degrees to cm (VEX V5 wheel: 200 deg = 13.2 cm for 4" wheel)
+        let deg_to_cm = 13.2 / 200.0;
+        let left_cm = left_delta * deg_to_cm;
+        let right_cm = right_delta * deg_to_cm;
+        let d_center = (left_cm + right_cm) / 2.0;
+        let d_theta = (right_cm - left_cm) / 18.0; // 18cm track width (adjust as needed)
+
+        // Move each particle
+        for p in particles.iter_mut() {
+            // Add noise to motion model
+            let noise_trans = rng.next_f64() * 0.5 - 0.25; // +/-0.25cm
+            let noise_rot = rng.next_f64() * 0.02 - 0.01; // +/-0.01rad
+            let theta = self.imu.heading().unwrap_or(0.0).to_radians();
+            let dx = (d_center + noise_trans) * theta.cos();
+            let dy = (d_center + noise_trans) * theta.sin();
+            p.x += dx;
+            p.y += dy;
+            // Clamp to field
+            p.x = p.x.clamp(0.0,FIELD_WIDTH);
+            p.y = p.y.clamp(0.0, FIELD_HEIGHT);
+        }
+
 
         // Read actual sensor values
         let sensor_max_range = 200.0; // cm
@@ -145,8 +182,17 @@ impl Robot {
 
         // Normalize weights
         let total_weight: f64 = particles.iter().map(|p| p.weight).sum();
-        for p in particles.iter_mut() {
-            p.weight /= total_weight.max(1e-12);
+        if total_weight < 1e-12 {
+            // All weights collapsed, reinitialize particles
+            for p in particles.iter_mut() {
+                p.x = rng.next_f64() * FIELD_WIDTH;
+                p.y = rng.next_f64() * FIELD_HEIGHT;
+                p.weight = 1.0;
+            }
+        } else {
+            for p in particles.iter_mut() {
+                p.weight /= total_weight;
+            }
         }
 
         // Resample particles (systematic resampling)
@@ -167,7 +213,23 @@ impl Robot {
             }
             u += step;
         }
-        particles = new_particles;
+        // If all resampled particles are identical, reinitialize
+        let identical = new_particles.iter().all(|p| p.x == new_particles[0].x && p.y == new_particles[0].y);
+        if identical {
+            for p in new_particles.iter_mut() {
+                p.x = rng.next_f64() * FIELD_WIDTH;
+                p.y = rng.next_f64() * FIELD_HEIGHT;
+                p.weight = 1.0;
+            }
+        }
+        // Copy new_particles into static buffer
+        unsafe {
+            if let Some(pbuf) = PARTICLES.as_mut() {
+                for (i, p) in new_particles.iter().enumerate() {
+                    pbuf[i] = Particle::new(p.x, p.y);
+                }
+            }
+        }
 
         // Estimate pose (weighted mean)
         let mut x_sum = 0.0;
@@ -189,6 +251,9 @@ struct Robot {
     // Drivetrain motors
     left_drive: Motor,
     right_drive: Motor,
+    // Odometry state
+    prev_left_pos_deg: f64,
+    prev_right_pos_deg: f64,
 
     // DR4B motors
     dr4b_left: Motor,
@@ -228,6 +293,8 @@ impl Robot {
             dist_right: DistanceSensor::new(peripherals.port_20),
             main_controller: peripherals.primary_controller,
             sub_controller: peripherals.partner_controller,
+            prev_left_pos_deg: 0.0,
+            prev_right_pos_deg: 0.0,
         }
     }
 }
